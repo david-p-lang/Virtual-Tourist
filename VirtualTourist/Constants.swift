@@ -19,5 +19,5 @@ class Constants {
     static let responseFormat = "json"
     static let albumSegue = "albumSegue"
     static let flickerCell = "flickrCell"
-    static let apiKey = "e79e37db8c17fb8f7b009ea28a20cb4c"
+    static let apiKey = ""
 }
