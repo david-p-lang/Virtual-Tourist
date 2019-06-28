@@ -9,85 +9,64 @@
 import Foundation
 import UIKit
 
-class Constants {
-    static let albumSegue = "albumSegue"
-    static let flickerCell = "flickrCell"
-    static let apiKey = "e79e37db8c17fb8f7b009ea28a20cb4c"
-}
-
-struct FlickrSearchResult: Codable {
-    let photos: FlickrPagesResult?
-    let stat: String
-}
-
-struct FlickrPagesResult: Codable {
-    let photo: [FlickrUrl]
-    let page: Int
-    let pages: Int
-    let perpage: Int
-    let total: String
-}
-
-struct FlickrUrl: Codable {
-    let id: String
-    let farm: Int
-    let owner: String
-    let secret: String
-    let server: String
-    let title: String
-}
-
 class Flickr {
     
     var session: URLSession?
     
-    func buildDataTask( url: URL,
-        //parameters: [String:String],
-        session: URLSession,
-        completion: @escaping (Any?, Error?) -> Void
-        ) -> URLSessionDataTask {
+    class func buildDataTask( url: URL, completion: @escaping (Any?, URLResponse?, Error?) -> Void) -> URLSessionDataTask {
         
         var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
             request.addValue("application/json", forHTTPHeaderField: "Accept")
         
-        return session.dataTask(with: request, completionHandler: { (data, response, error) in
+        return URLSession.shared.dataTask(with: request, completionHandler: { (data, response, error) in
             guard let data = data, error == nil else {
-                completion(nil, error)
+                completion(nil, response, error)
                 return
             }
-            
-            completion(data, nil)
+            completion(data, response, nil)
         })
     }
     
-    func buildLocationQuery() -> URL {
-        let latString = String(35.0)
-        let lonString = String(40.0)
-        var components = URLComponents()
+    /// Create a URLComponent and array of query items and return URL from the component as an optional
+    class func buildLocationQuery(_ coord: [String:Double], pageNumber: Int) -> URL? {
+        let latString = String(coord[Constants.latKey] ?? 0)
+        let lonString = String(coord[Constants.lonKey] ?? 0)
         let queryItemLatitude = URLQueryItem(name: "lat", value: latString)
         let queryItemLongitude = URLQueryItem(name: "lon", value: lonString)
-        let queryItemPerPage = URLQueryItem(name: "per_page", value: "25")
+        let queryItemPerPage = URLQueryItem(name: "per_page", value: Constants.perPage)
+        let queryItemPage = URLQueryItem(name: "page", value: "\(pageNumber)")
         let queryItemMethod = URLQueryItem(name: "method", value: "flickr.photos.search")
         let queryItemAPIKey = URLQueryItem(name: "api_key", value: Constants.apiKey)
-        let queryItemFormat = URLQueryItem(name: "format", value: "json")
+        let queryItemFormat = URLQueryItem(name: "format", value: Constants.responseFormat)
         let queryItemCallback = URLQueryItem(name: "nojsoncallback", value: "1")
+        var components = URLComponents()
         components.scheme = "https"
         components.host = "api.flickr.com"
         components.path = "/services/rest"
-        components.queryItems = [queryItemMethod, queryItemAPIKey, queryItemLongitude, queryItemLatitude, queryItemFormat, queryItemPerPage, queryItemCallback]
-        return components.url!
+        components.queryItems = [queryItemMethod, queryItemAPIKey, queryItemLongitude, queryItemLatitude, queryItemFormat, queryItemPerPage, queryItemPage, queryItemCallback]
+        return components.url
     }
     
-    func requestImageResourceLocations(session: URLSession, completion: @escaping ((FlickrSearchResult?, Error?) -> Void)) {
-        let url = buildLocationQuery()
-        let task = buildDataTask(url: url, session: session) { (data, error) in
+    /// Given a set coordinates request data on the images which is then used to build queries for single images
+    ///
+    /// - Parameters:
+    ///   - coord: latitude and longitude as double
+    ///   - pageNumber: for refreshing data with a randomized page number
+    ///   - completion: FlickrSearchResults or error as optionals
+    class func requestImageResourceLocations(coord: [String:Double], pageNumber: Int, completion: @escaping ((FlickrSearchResult?, Error?) -> Void)) {
+        let success = 200...299
+        guard let url = buildLocationQuery(coord, pageNumber: pageNumber) else {return}
+        let task = buildDataTask(url: url) { (data, response, error) in
             guard error == nil, let data = data else {
                 completion(nil, error!)
                 return
             }
-            
+            guard let statusCode = (response as? HTTPURLResponse)?.statusCode, success.contains(statusCode) else {
+                completion(nil, ConnectionError.connectionFailure)
+                return
+            }
             let flickrSearchDecoder = JSONDecoder()
             do {
                 let flickrResponseData = try flickrSearchDecoder.decode(FlickrSearchResult.self, from: data as! Data)
@@ -96,9 +75,46 @@ class Flickr {
                 completion(nil, error)
             }
         }
-        
         task.resume()
+     }
+    
+    /// Create the URL for the specific image request
+    ///
+    /// - Parameter flickrUrl: Flickrpageresult has an array of these omponents of the URLs
+    /// - Returns: provide the URL
+    class func buildImageUrlString(_ flickrUrl: FlickrUrl) -> URL? {
+        var components = URLComponents()
+        let host = "farm" + String(flickrUrl.farm) + ".staticflickr.com"
+        let path = "/\(flickrUrl.server)/\(flickrUrl.id)_\(flickrUrl.secret)_m.jpg"
+        components.scheme = "https"
+        components.host = host
+        components.path = path
+        return components.url
     }
     
-    
+    /// Send requests for images
+    ///
+    /// - Parameters:
+    ///   - urlString: the urls are determined by informattion provided by the request images locaation function
+    ///   - completion: Provide UIImage or error as optionals
+    class func requestImage(urlString: String, completion: @escaping (UIImage?, Error?) -> Void) {
+        let success = 200...299
+        guard let url = URL(string: urlString) else {return}
+        let task = buildDataTask(url: url) { (data, response, error) in
+            guard error == nil, let data = data else {
+                completion(nil, error)
+                return
+            }
+            guard let statusCode = (response as? HTTPURLResponse)?.statusCode, success.contains(statusCode) else {
+                completion(nil, ConnectionError.connectionFailure)
+                return
+            }
+            guard let flickrImage = UIImage(data: data as! Data) else {
+                completion(nil, error)
+                return
+            }
+            completion(flickrImage, nil)
+        }
+        task.resume()
+    }
 }
